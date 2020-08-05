@@ -1,0 +1,67 @@
+image: node:10.15.3
+
+clone:
+  depth: full
+
+definitions:
+  caches: #cache for sonar scanner
+    sonar: ~/.sonar/cache
+  steps:
+    - step: &install-and-run-tests #install and run tests
+        name: Install & Run Test
+        caches:
+          - node
+        script:
+          - npm install
+          - npm run test
+        artifacts: #defining the artifacts to be passed to each future step.
+          - coverage/lcov.info
+    - step: &code-analysis #submit sonar scan report to sonar cloud
+        name: Code Analysis
+        caches:
+          - sonar
+        script:
+          - pipe: sonarsource/sonarcloud-scan:1.0.1
+    - step: &build #build source
+        name: Build
+        caches:
+          - node
+        script:
+          - npm run build
+        artifacts:
+          - build/**
+    - step: &deploy-staging #deploy to s3 and cloudfront
+        name: Deploy (Staging)
+        deployment: staging
+        script:
+          - pipe: atlassian/aws-s3-deploy:0.4.4
+            variables:
+              AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID
+              AWS_SECRET_ACCESS_KEY: $AWS_SECRET_ACCESS_KEY
+              AWS_DEFAULT_REGION: $AWS_DEFAULT_REGION
+              S3_BUCKET: $STAGING_BUCKET_NAME
+              LOCAL_PATH: "build"
+          - pipe: atlassian/aws-cloudfront-invalidate:0.3.3
+            variables:
+              AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID
+              AWS_SECRET_ACCESS_KEY: $AWS_SECRET_ACCESS_KEY
+              AWS_DEFAULT_REGION: $AWS_DEFAULT_REGION
+              DISTRIBUTION_ID: $STAGING_DISTRIBUTION_ID
+
+pipelines:
+  custom: #Pipelines that can only be triggered manually
+    release/staging:
+      - step: *install-and-run-tests
+      - step: *code-analysis
+      - step: *build
+      - step: *deploy-staging
+  branches:
+    development: #Pipelines that will be triggered on merge
+      - step: *install-and-run-tests
+      - step: *code-analysis
+      - step: *build
+  pull-requests: #Pipelines that will be triggered on pull request creation and update
+    feature/*:
+      - step: *install-and-run-tests
+      - step: *code-analysis
+      - step: *build
